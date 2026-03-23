@@ -76,7 +76,7 @@ namespace SlaveSpi
         ~SlaveSpi();
         
         void begin();
-        void onMessageReceived(std::function<void(const MessageMeta&, const uint32_t*)> callback);
+        void onMessageReceived(std::function<void(const MessageMeta, const uint32_t*)> callback);
         void SpiSlaveIsr() override;
         uint16_t processMessages();
     };
