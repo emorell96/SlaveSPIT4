@@ -41,9 +41,19 @@ void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::_processIdleState()
     }
     uint16_t word = rx_message_buffer.pop_front();
     // start of message
-    if(word == 0xDEAD)
+    if(word == 0xDEAD) // if we enter this if statement, we know we have at least 5 words in the buffer, so we can safely read the next 4 words for the metadata without checking if they are available
     {
+        // a message is structured as follows:
+        // - 0xDEAD (16 bits) - start of message
+        // - DEST_ID (16 bits) - destination ID of the message, only process messages with a matching ID // this part of the message will be matched by the SPI interface directly.
+        // - TYPE (16 bits) - type of the message, used to determine how to process the message
+        // - SEQUENCE (16 bits) - sequence number of the message, used to detect lost messages or out of order messages
+        // - LENGTH (16 bits) - length of the payload in bytes
+        // - PAYLOAD (variable length) - the actual data of the message, length is determined by the LENGTH field
+        // - CRC (16 bits) - CRC of the message, used to detect corrupted messages
         current_message_meta.DestinationId = rx_message_buffer.pop_front();
+        current_message_meta.Type = rx_message_buffer.pop_front();
+        current_message_meta.Sequence = rx_message_buffer.pop_front();
         current_message_meta.Length = rx_message_buffer.pop_front(); // read the length of the payload, we need this to know how many words to clear from the buffer even if the message is not for us
 
         if(current_message_meta.DestinationId != SlaveId)
@@ -54,6 +64,8 @@ void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::_processIdleState()
             this->clearRxBuffer(current_message_meta.Length + 2); // +2 for the Type and Sequence fields
             return 0;
         }
+        onMessageReceived(current_message_meta, )
+        
 
     }
 }
