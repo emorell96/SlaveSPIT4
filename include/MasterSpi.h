@@ -14,19 +14,36 @@ namespace SlaveSpi
     /// - CRC (16 bits) - CRC of the message, used to detect corrupted messages
     /// @tparam SPIPort 
     /// @tparam SlaveId 
-    /// @tparam BufferSize 
-    template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
+    template <SPIClass *SPIPort, uint16_t SlaveId>
     class MasterSpi
     {
         public:
-            MasterSpi(uint8_t chipSelectPin, SPISettings settings = SPISettings(1000000, MSBFIRST, SPI_MODE0)) : spi_settings(settings) {
+            MasterSpi(uint8_t chipSelectPin = 254, SPISettings settings = SPISettings(1000000, MSBFIRST, SPI_MODE0)) : spi_settings(settings) 
+            {
+                if(chipSelectPin == 254)
+                {
+                    if(SPIPort == &SPI)
+                    {
+                        chipSelectPin = 10; // default chip select pin for SPI on the Teensy 4.1
+                    }
+                    else if (SPIPort == &SPI1)
+                    {
+                        chipSelectPin = 38; // default chip select pin for SPI1 on the Teensy 4.1
+                    }
+                }
+                this->chipSelectPin = chipSelectPin;
+            }
+            void begin()
+            {
                 SPIPort->begin();
                 pinMode(chipSelectPin, OUTPUT);
                 digitalWrite(chipSelectPin, HIGH); // set the chip select pin to high (inactive)
-                this->chipSelectPin = chipSelectPin;
             }
 
-            ~MasterSpi();
+            ~MasterSpi() 
+            {
+
+            }
             uint8_t transfer16(uint16_t* data, size_t length, uint16_t type = 0, uint16_t sequence = 0);
             void setSettings(SPISettings settings) { spi_settings = settings; }
             
@@ -35,8 +52,8 @@ namespace SlaveSpi
             uint8_t chipSelectPin;
     };
 
-    template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
-    inline uint8_t MasterSpi<SPIPort, SlaveId, BufferSize>::transfer16(uint16_t *data, size_t length, uint16_t type, uint16_t sequence)
+    template <SPIClass *SPIPort, uint16_t SlaveId>
+    inline uint8_t MasterSpi<SPIPort, SlaveId>::transfer16(uint16_t *data, size_t length, uint16_t type, uint16_t sequence)
     {
         uint16_t crc = crc16_words(data, length);
         SPIPort->beginTransaction(spi_settings);
@@ -50,9 +67,15 @@ namespace SlaveSpi
         {
             SPIPort->transfer16(data[i]); // payload
         }
-        SPIPort->transfer16(crc); // CRC
-        digitalWriteFast(chipSelectPin, HIGH); // set the chip select pin to high (inactive)
+        SPIPort->transfer32(crc << 16); // CRC
+        // SPIPort->transfer16(crc);
         SPIPort->endTransaction();
+
+        digitalWriteFast(chipSelectPin, HIGH); // set the chip select pin to high (inactive)
+        #if defined(MASTER_SPI_DEBUG)
+        Serial.print("Crc16: ");
+        Serial.println(crc, HEX);
+        #endif
         return 0;
     }
 }

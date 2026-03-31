@@ -9,16 +9,18 @@ namespace SlaveSpi
     struct ArrayView
     {
         /* data */
+    private:
         T* data = nullptr;
-        std::size_t size = 0;
-
-        ArrayView(T*data, std::size_t size) : data(data), size(size) {}
-        ArrayView(const std::vector<T>& vec) : data(vec.data()), size(vec.size()) {}
+        const std::size_t _size = 0;
+    public:
+        ArrayView(T*data, const std::size_t size) : data(data), _size(size) {}
+        ArrayView(std::vector<T>& vec) : data(vec.data()), _size(vec.size()) {}
 
         T& operator[](std::size_t i) const { return data[i]; }
         T* begin() const { return data; }
-        T* end() const { return data + size; }
-        bool empty() const { return size == 0; }
+        T* end() const { return data + _size; }
+        bool empty() const { return _size == 0; }
+        const std::size_t size() const { return _size; }
     };
     
 }

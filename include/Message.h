@@ -11,7 +11,7 @@ namespace SlaveSpi
         uint16_t DestinationId;
         uint16_t Type;
         uint16_t Sequence;
-        uint16_t Length = -1;
+        uint16_t Length;
         uint16_t Crc16;
     };
 } // namespace SlaveSpi

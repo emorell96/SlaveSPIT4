@@ -27,6 +27,7 @@ namespace SlaveSpi
     {
         public:
             SlaveRegisters(volatile uint32_t* spiAddr) : spiAddr(spiAddr) {}
+            SlaveRegisters() {}
         #if defined(__IMXRT1062__)
             inline volatile uint32_t& CR() { return spiAddr[4]; } // CR is at offset 0x10, which is 4 32-bit words into the register map
             inline volatile uint32_t& FCR() { return spiAddr[22]; } 
@@ -73,7 +74,7 @@ namespace SlaveSpi
         std::vector<uint16_t> current_message_payload;
 
         SpiSlaveParserState parser_state = SpiSlaveParserState::Idle;
-        std::function<void(const MessageMeta&, ArrayView<const uint16_t>)> message_received_callback;
+        std::function<void(const MessageMeta&, ArrayView<uint16_t>)> message_received_callback;
 
         void clearRxBuffer(uint16_t messagesToClear);
 
@@ -88,7 +89,7 @@ namespace SlaveSpi
         ~SlaveSpi();
         
         void begin();
-        void onMessageReceived(std::function<void(const MessageMeta&, ArrayView<const uint16_t>)> callback);
+        void onMessageReceived(std::function<void(const MessageMeta&, ArrayView<uint16_t>)> callback);
         void SpiSlaveIsr() override;
         uint16_t processMessages();
     };
@@ -158,6 +159,9 @@ void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::_processIdleState()
             // not for us, ignore message
             // but first clear the rest of the message from the buffer
             // clear the rest of the message from the buffer
+            #if defined(SLAVE_SPI_DEBUG)
+            Serial.println("Message not for us, clearing buffer...");
+            #endif
             this->parser_state = SpiSlaveParserState::ClearBuffer;
             return;
         }
@@ -165,6 +169,9 @@ void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::_processIdleState()
         {
             // clear the payload vector
             this->current_message_payload.clear();
+            #if defined(SLAVE_SPI_DEBUG)
+            Serial.println("Message for us, reading message...");
+            #endif
             this->parser_state = SpiSlaveParserState::ReadMessage;
             return;
         }
@@ -174,12 +181,21 @@ void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::_processIdleState()
 template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
 void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::_clearBuffer()
 {
-    while(rx_message_buffer.available() > 0 && current_message_meta.Length > -1)
+    while(rx_message_buffer.available() > 0 && current_message_meta.Length > 0)
     {
-        // clear the data in the buffer until we reach the length of the message, and clear the CRC as well. (that's why we clear until the message length is -1)
+        // clear the data in the buffer until we reach the length of the message.
         rx_message_buffer.pop_front();
         current_message_meta.Length--; // decrement the length of the message we are trying to clear, once this reaches 0, we know we have cleared the whole message from the buffer and can go back to idle state
     } // while there is still data in the buffer, keep clearing until we have cleared the whole message (including the CRC)
+
+    // clear CRC
+    if(rx_message_buffer.available() > 0)
+    {
+        #if defined(SLAVE_SPI_DEBUG)
+        Serial.println("Clearing CRC from buffer...");
+        #endif
+        rx_message_buffer.pop_front(); // clear the CRC from the buffer
+    }
     
     if (current_message_meta.Length <= -1) // we have cleared the whole message plus the CRC from the buffer, we can go back to idle state
     {
@@ -199,6 +215,24 @@ void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::_readMessage()
     if(current_message_meta.Length == 0)
     {
         // we have read the whole payload of the message, now we need to check the CRC and if it's correct, call the callback function to process the message
+        #if defined(SLAVE_SPI_DEBUG)
+        Serial.print("Message Destination ID: "); Serial.println(current_message_meta.DestinationId, HEX);
+        Serial.print("Message Type: "); Serial.println(current_message_meta.Type, HEX);
+        Serial.print("Message Sequence: "); Serial.println(current_message_meta.Sequence, HEX);
+
+
+        Serial.print("Message length: ");
+        Serial.println(current_message_payload.size());
+        for(auto x : current_message_payload)
+        {
+            Serial.print(x, HEX);
+            Serial.print(" ");
+        }
+        Serial.println("Message read, checking CRC...");
+        #endif
+
+        current_message_meta.Length = current_message_payload.size(); // set the length of the message to the actual length of the payload we have read
+       
         this->parser_state = SpiSlaveParserState::CheckCrc;
     }
 }
@@ -206,6 +240,7 @@ void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::_readMessage()
 template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
 void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::_checkCrc()
 {
+    // Serial.println("Checking CRC...");
     if(rx_message_buffer.available() == 0)
     {
         // we need to wait for the CRC to arrive, so just return and wait for the next interrupt to process the CRC
@@ -214,18 +249,36 @@ void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::_checkCrc()
     uint16_t received_crc = rx_message_buffer.pop_front();
     uint16_t calculated_crc = crc16_words(current_message_payload.data(), current_message_payload.size());
 
+    current_message_meta.Crc16 = calculated_crc; // set the CRC of the message meta to the calculated CRC, this is useful for the callback function to know what the CRC of the message is, and also for debugging purposes.
+
     if(received_crc == calculated_crc)
     {
+        #if defined(SLAVE_SPI_DEBUG)
+        Serial.println("CRC is correct, message is valid, processing message...");
+        #endif
         // CRC is correct, call the callback function to process the message
         if(message_received_callback)
         {
-            message_received_callback(current_message_meta, ArrayView<const uint16_t>(current_message_payload));
+            #if defined(SLAVE_SPI_DEBUG)
+            Serial.println("Calling message received callback...");
+            #endif
+            message_received_callback(current_message_meta, ArrayView<uint16_t>(current_message_payload));
         }
+        this->parser_state = SpiSlaveParserState::Idle; // after processing the message, go back to idle state to wait for the next message
+        return;
     }
     else
     {
+        #if defined(SLAVE_SPI_DEBUG)
+        Serial.print("CRC received: ");
+        Serial.println(received_crc, HEX);
+        Serial.println("CRC is incorrect, message is corrupted, ignoring message...");
+        #endif
         // CRC is incorrect, message is corrupted, ignore message
     }
+    #if defined(SLAVE_SPI_DEBUG)
+    Serial.println("Returning to idle...");
+    #endif
     // after processing the message, go back to idle state to wait for the next message
     this->parser_state = SpiSlaveParserState::Idle;
 }
@@ -234,7 +287,7 @@ template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
 inline SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::SlaveSpi()
 {
 
-    if constexpr (SPIPort == &SPI) 
+    if (SPIPort == &SPI) 
     {
         registers = SlaveRegisters((volatile uint32_t*)IMXRT_LPSPI4_ADDRESS);
         nvic_irq = IRQ_LPSPI4;
@@ -255,7 +308,7 @@ inline SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::SlaveSpi()
         IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_02 = 0x3; /* LPSPI4 SDO (MOSI) */
         IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_00 = 0x3; /* LPSPI4 PCS0 (CS) */
     }
-    else if constexpr (SPIPort == &SPI1) 
+    else if (SPIPort == &SPI1) 
     {
         registers = SlaveRegisters((volatile uint32_t*)IMXRT_LPSPI3_ADDRESS);
         nvic_irq = IRQ_LPSPI3;
@@ -275,6 +328,11 @@ inline SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::SlaveSpi()
         IOMUXC_SW_MUX_CTL_PAD_GPIO_AD_B1_13 = 0b010; /*LPSPI3 SDI (MISO) */ // 010
         IOMUXC_SW_MUX_CTL_PAD_GPIO_AD_B1_12 = 0b010; /* LPSPI3 PCS0 (CS) */ // 010 // see p. 504 of reference manual https://www.pjrc.com/teensy/IMXRT1060RM_rev2.pdf
     }
+}
+
+template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
+inline SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::~SlaveSpi()
+{
 }
 
 template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
@@ -318,10 +376,22 @@ void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::begin()
 }
 
 template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
+inline void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::onMessageReceived(std::function<void(const MessageMeta &, ArrayView<uint16_t>)> callback)
+{
+    this->message_received_callback = callback;
+}
+
+template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
 void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::SpiSlaveIsr()
 {
     // this handles the ISR created by the SPI. Two options so far: data received, or frame complete (CS goes high). In the first case we read the data from the RDR and put it in the rx_message_buffer. In the second case we set a flag to indicate that a message is ready to be processed, and reset the parser state to idle.
     uint32_t status = registers.SR(); // takes a "snapshot" of the status by saving it into a variable
+    if (status & LPSPI_SR_RDF) // data received, there is data in the RDR register that needs to be read
+    {
+        uint32_t data = registers.RDR(); // read the data from the RDR register, this also clears the RDF flag in the status register
+        this->rx_message_buffer.push_back((data >> 16) & 0xFFFF); // divide the 32-bit data into two 16-bit words and push them into the rx_message_buffer
+        this->rx_message_buffer.push_back(data & 0xFFFF);
+    }
     if(status & LPSPI_SR_FCF && status & LPSPI_SR_DMF) // frame complete, CS goes high, end of message and a data match has happened. i.e. we are receiving a message that is for us, and the message is complete (CS goes high)
     {
         // clear RDMO
@@ -335,14 +405,8 @@ void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::SpiSlaveIsr()
 
         // set a flag to indicate that a message is ready to be processed
         // reset the parser state to idle
-        parser_state = SpiSlaveParserState::Idle;
-    }
-    else if (status & LPSPI_SR_RDF) // data received, there is data in the RDR register that needs to be read
-    {
-        uint32_t data = registers.RDR(); // read the data from the RDR register, this also clears the RDF flag in the status register
-        this->rx_message_buffer.push_back((data >> 16) & 0xFFFF); // divide the 32-bit data into two 16-bit words and push them into the rx_message_buffer
-        this->rx_message_buffer.push_back(data & 0xFFFF);
-    }
+        // parser_state = SpiSlaveParserState::Idle;
+    }    
 
 }
 
@@ -374,10 +438,6 @@ uint16_t SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::processMessages()
     default:
         break;
     }
-
-
-    
-
     return 0;
 }
 

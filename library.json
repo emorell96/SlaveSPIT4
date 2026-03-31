@@ -1,6 +1,12 @@
 {
   "name": "SlaveSpiT4",
   "version": "0.0.1",
+  "build": {
+    "includeDir": "include",
+    "flags": [
+      "-I include"
+    ]
+  },
   "description": "A library for SPI communication in slave mode on the Teensy 4.1 platform.",
   "keywords": "spi, slave, teensy, communication",
   "repository":
@@ -16,9 +22,5 @@
     }
   ],
   "license": "GPL-3.0-only",
-  "homepage": "https://github.com/emorell96/SlaveSPIT4",
-  "dependencies": {
-  },
-  "frameworks": "arduino",
-  "platforms": "teensy@5.0"
+  "homepage": "https://github.com/emorell96/SlaveSPIT4"
 }
