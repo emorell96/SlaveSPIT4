@@ -8,22 +8,35 @@ namespace SlaveSpi
     {
     private:
         std::map<uint16_t, std::shared_ptr<SpiEndpoint>> endpoints; // map of endpoint ID to endpoint instance  
+        std::shared_ptr<SlaveSpiBase> spiSlave;
     public:
-        SpiRouter(/* args */);
+        SpiRouter(std::shared_ptr<SlaveSpiBase> spiSlave);
         ~SpiRouter();
 
+        void begin();
         bool registerEndpoint(std::shared_ptr<SpiEndpoint> endpoint);
         void routeMessage(const MessageMeta& meta, ArrayView<uint16_t> payload);
     };
     
 } // namespace SlaveSpi
 
-inline SlaveSpi::SpiRouter::SpiRouter()
+inline SlaveSpi::SpiRouter::SpiRouter(std::shared_ptr<SlaveSpiBase> spiSlave) : spiSlave(spiSlave)
 {
 }
 
 inline SlaveSpi::SpiRouter::~SpiRouter()
 {
+}
+
+inline void SlaveSpi::SpiRouter::begin()
+{
+    if(spiSlave)
+    {
+        spiSlave->begin();
+        spiSlave->onMessageReceived([this](const MessageMeta& meta, ArrayView<uint16_t> payload){
+            this->routeMessage(meta, payload);
+        });
+    }
 }
 
 inline bool SlaveSpi::SpiRouter::registerEndpoint(std::shared_ptr<SpiEndpoint> endpoint)
@@ -41,7 +54,12 @@ void SlaveSpi::SpiRouter::routeMessage(const MessageMeta &meta, ArrayView<uint16
 {
     if(endpoints.find(meta.Type) != endpoints.end())
     {
-        endpoints[meta.Type]->onMessageReceived(meta, payload);
+        auto response = endpoints[meta.Type]->onMessageReceived(meta, payload);
+        if(response.has_value())
+        {
+            // handle the response if needed
+            spiSlave->transferMessage(response.value());
+        }
     }
     else
     {

@@ -21,6 +21,9 @@ namespace SlaveSpi
     class SlaveSpiBase{
         public:
             virtual void SpiSlaveIsr() = 0;
+            virtual void begin() = 0;
+            virtual void onMessageReceived(std::function<void(const MessageMeta&, ArrayView<uint16_t>)> callback) = 0;
+            virtual void transferMessage(const Response& response) = 0;
     };
 
     struct SlaveRegisters
@@ -69,6 +72,7 @@ namespace SlaveSpi
         uint32_t nvic_irq = 0;
         Circular_Buffer<uint16_t, BufferSize> rx_message_buffer;
         Circular_Buffer<uint16_t, BufferSize> tx_message_buffer;
+        uint8_t CS_pin;
 
         MessageMeta current_message_meta;
         std::vector<uint16_t> current_message_payload;
@@ -88,9 +92,10 @@ namespace SlaveSpi
         SlaveSpi(/* args */);
         ~SlaveSpi();
         
-        void begin();
-        void onMessageReceived(std::function<void(const MessageMeta&, ArrayView<uint16_t>)> callback);
-        void SpiSlaveIsr() override;
+        virtual void begin() override;
+        virtual void onMessageReceived(std::function<void(const MessageMeta&, ArrayView<uint16_t>)> callback) override;
+        virtual void SpiSlaveIsr() override;
+        virtual void transferMessage(const Response& response) override;
         uint16_t processMessages();
     };
 
@@ -307,6 +312,7 @@ inline SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::SlaveSpi()
         IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_01 = 0x3; /* LPSPI4 SDI (MISO) */
         IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_02 = 0x3; /* LPSPI4 SDO (MOSI) */
         IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_00 = 0x3; /* LPSPI4 PCS0 (CS) */
+        CS_pin = 10;
     }
     else if (SPIPort == &SPI1) 
     {
@@ -327,6 +333,7 @@ inline SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::SlaveSpi()
         IOMUXC_SW_MUX_CTL_PAD_GPIO_AD_B1_14 = 0b010; /* LPSPI3 SDO (MOSI) */ // 010 // see p. 506 of reference manual https://www.pjrc.com/teensy/IMXRT1060RM_rev2.pdf
         IOMUXC_SW_MUX_CTL_PAD_GPIO_AD_B1_13 = 0b010; /*LPSPI3 SDI (MISO) */ // 010
         IOMUXC_SW_MUX_CTL_PAD_GPIO_AD_B1_12 = 0b010; /* LPSPI3 PCS0 (CS) */ // 010 // see p. 504 of reference manual https://www.pjrc.com/teensy/IMXRT1060RM_rev2.pdf
+        CS_pin = 38;
     }
 }
 
@@ -408,6 +415,35 @@ void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::SpiSlaveIsr()
         // parser_state = SpiSlaveParserState::Idle;
     }    
 
+}
+
+template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
+inline void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::transferMessage(const Response &response)
+{
+    SPIPort->beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0)); // these settings must match the settings used by the master to communicate with this slave
+    digitalWriteFast(CS_pin, LOW); // set CS low to indicate the start of a message
+
+    // a message is structured as follows:
+        // - 0xDEAD (16 bits) - start of message
+        // - DEST_ID (16 bits) - destination ID of the message, only process messages with a matching ID // this part of the message will be matched by the SPI interface directly.
+        // - TYPE (16 bits) - type of the message, used to determine how to process the message
+        // - SEQUENCE (16 bits) - sequence number of the message, used to detect lost messages or out of order messages
+        // - LENGTH (16 bits) - length of the payload in bytes
+        // - PAYLOAD (variable length) - the actual data of the message, length is determined by the LENGTH field
+        // - CRC (16 bits) - CRC of the message, used to detect corrupted messages
+
+    SPIPort->transfer16(0xDEAD); // start of message
+    SPIPort->transfer16(response.meta.DestinationId); // destination ID
+    SPIPort->transfer16(response.meta.Type); // message type
+    SPIPort->transfer16(response.meta.Sequence); // message sequence
+    SPIPort->transfer16(response.meta.Length); // message length
+    for(uint16_t i = 0; i < response.meta.Length; i++)
+    {
+        SPIPort->transfer16(response.payload[i]); // message payload
+    }
+    SPIPort->transfer16(response.meta.Crc16); // message CRC
+    digitalWriteFast(CS_pin, HIGH); // set CS high to indicate the end of a message
+    SPIPort->endTransaction();
 }
 
 template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>

@@ -14,6 +14,13 @@ namespace SlaveSpi
         uint16_t Length;
         uint16_t Crc16;
     };
+
+    
+    struct Response
+    {
+        MessageMeta meta;
+        std::vector<uint16_t> payload;
+    };
 } // namespace SlaveSpi
 
 #endif // MESSAGE_H

@@ -1,5 +1,10 @@
+#pragma once
+#ifndef SPIENDPOINT_H
+#define SPIENDPOINT_H
 #include "Arduino.h"
 #include "SlaveSpi.h"
+#include <memory>
+#include <optional>
 
 namespace SlaveSpi
 {
@@ -12,7 +17,7 @@ namespace SlaveSpi
         SpiEndpoint(uint16_t id); 
         ~SpiEndpoint();
 
-        virtual void onMessageReceived(const MessageMeta& meta, ArrayView<uint16_t> payload) = 0;
+        virtual std::optional<Response> onMessageReceived(const MessageMeta& meta, ArrayView<uint16_t> payload) = 0;
         const uint16_t getId() const { return endpointId; }
     };
     
@@ -26,3 +31,4 @@ namespace SlaveSpi
     
 } // namespace SlaveSpi
 
+#endif
