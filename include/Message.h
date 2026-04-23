@@ -20,6 +20,9 @@ namespace SlaveSpi
     {
         MessageMeta meta;
         std::vector<uint16_t> payload;
+
+        Response(){}
+        Response(size_t payload_length) : payload(payload_length) {}
     };
 } // namespace SlaveSpi
 

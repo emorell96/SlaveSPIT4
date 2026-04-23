@@ -88,6 +88,10 @@ namespace SlaveSpi
         void _clearBuffer();
         void _readMessage();
         void _checkCrc();
+        void transfer16(uint16_t data);
+        void transfer32(uint32_t data);
+        void flush();
+        Circular_Buffer<uint16_t, BufferSize> outputBuffer; // used for coallescing 16-bit words into 32-bit words for transmission, since the SPI hardware can only transmit 32 bits at a time, but our message format is based on 16-bit words. This buffer is used to store the two 16-bit words that need to be transmitted together as a single 32-bit word. When we want to transmit a 16-bit word, we push it into this buffer, and when there are two words in the buffer, we combine them into a single 32-bit word and send it using the TDR register of the SPI hardware. This allows us to maintain our 16-bit word message format while still using the 32-bit transmission capability of the SPI hardware.
     public:
         SlaveSpi(/* args */);
         ~SlaveSpi();
@@ -289,6 +293,52 @@ void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::_checkCrc()
 }
 
 template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
+inline void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::transfer16(uint16_t data)
+{
+    outputBuffer.push_back(data);
+    
+}
+
+template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
+inline void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::transfer32(uint32_t data)
+{
+    registers.TDR(data);
+}
+
+template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
+inline void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::flush()
+{
+    // if the buffer is empty do nothing
+    if(outputBuffer.size() == 0)
+    {
+        return;
+    }
+    uint16_t word1, word2;
+    uint32_t combined;
+
+    while(outputBuffer.available())
+    {
+        if(outputBuffer.size() >= 2)
+        {
+            // we have at least 2 words in the buffer, we can combine them into a single 32-bit word and send it
+            word1 = outputBuffer.pop_front();
+            word2 = outputBuffer.pop_front();
+            combined = ((uint32_t)word1 << 16) | word2;
+        }
+        else
+        {
+            // we only have one word in the buffer, we need to pad it with 0 to make it 32 bits and then send it
+            word1 = outputBuffer.pop_front();
+            combined = ((uint32_t)word1 << 16); // pad the lower 16 bits with 0
+        }
+#if defined(SLAVE_SPI_DEBUG)
+        Serial.print("Transferring word: "); Serial.println(combined, HEX);
+#endif
+        registers.TDR(combined);
+    }
+}
+
+template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
 inline SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::SlaveSpi()
 {
 
@@ -420,8 +470,7 @@ void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::SpiSlaveIsr()
 template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>
 inline void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::transferMessage(const Response &response)
 {
-    SPIPort->beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0)); // these settings must match the settings used by the master to communicate with this slave
-    digitalWriteFast(CS_pin, LOW); // set CS low to indicate the start of a message
+
 
     // a message is structured as follows:
         // - 0xDEAD (16 bits) - start of message
@@ -431,19 +480,24 @@ inline void SlaveSpi::SlaveSpi<SPIPort, SlaveId, BufferSize>::transferMessage(co
         // - LENGTH (16 bits) - length of the payload in bytes
         // - PAYLOAD (variable length) - the actual data of the message, length is determined by the LENGTH field
         // - CRC (16 bits) - CRC of the message, used to detect corrupted messages
-
-    SPIPort->transfer16(0xDEAD); // start of message
-    SPIPort->transfer16(response.meta.DestinationId); // destination ID
-    SPIPort->transfer16(response.meta.Type); // message type
-    SPIPort->transfer16(response.meta.Sequence); // message sequence
-    SPIPort->transfer16(response.meta.Length); // message length
+ #if defined(SLAVE_SPI_DEBUG)
+    Serial.print("Transferring message with Destination ID: "); Serial.println(response.meta.DestinationId, HEX);
+    Serial.print("Message Type: "); Serial.println(response.meta.Type, HEX);
+    Serial.print("Message Sequence: "); Serial.println(response.meta.Sequence, HEX);
+    Serial.print("Message length: "); Serial.println(response.meta.Length);
+    Serial.print("Crc16: "); Serial.println(response.meta.Crc16, HEX);
+#endif
+    this->transfer16(0xDEAD); // start of message
+    this->transfer16(SlaveId); // destination ID // ignores the value in the metadata, and uses the one linked to the slave.
+    this->transfer16(response.meta.Type); // message type
+    this->transfer16(response.meta.Sequence); // message sequence
+    this->transfer16(response.meta.Length); // message length
     for(uint16_t i = 0; i < response.meta.Length; i++)
     {
-        SPIPort->transfer16(response.payload[i]); // message payload
+        this->transfer16(response.payload[i]); // message payload
     }
-    SPIPort->transfer16(response.meta.Crc16); // message CRC
-    digitalWriteFast(CS_pin, HIGH); // set CS high to indicate the end of a message
-    SPIPort->endTransaction();
+    this->transfer16(response.meta.Crc16); // message CRC
+    this->flush(); // flush the output buffer to make sure all data is sent
 }
 
 template <SPIClass *SPIPort, uint16_t SlaveId, uint16_t BufferSize>

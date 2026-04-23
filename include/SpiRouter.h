@@ -58,7 +58,9 @@ void SlaveSpi::SpiRouter::routeMessage(const MessageMeta &meta, ArrayView<uint16
         if(response.has_value())
         {
             // handle the response if needed
-            spiSlave->transferMessage(response.value());
+            auto& responseData = response.value();
+            responseData.meta.Crc16 = crc16_words(responseData.payload.data(), responseData.payload.size());
+            spiSlave->transferMessage(responseData);
         }
     }
     else
